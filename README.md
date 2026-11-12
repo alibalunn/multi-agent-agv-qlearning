@@ -22,7 +22,7 @@ Ajanların durum temsili hem yön bulmayı hem de komşu aracı fark etmeyi sağ
 * **Batarya Seviyesi ($bat\_level$):** Kritik ($\le \%25$), Orta ($\le \%50$) ve Yüksek enerji durumu.
 * **Komşu AGV Göreli Konumu ($rel\_other$):** Komşu araç $\pm 2$ hücrelik yerel sensör menzilindeyse bağıl konumu $(dx, dy)$, uzaktaysa güvenli mesafe bilgisi.
 * **Koridor Durumu ($corr\_other$):** Karşıdaki aracın tek şeritli koridorda olup olmadığı ve hangi yöne gittiği.
-* **İstasyon Stok Durumu ($stok$):** Bulunulan yakadaki üretim bandında yeni yük hazır mı?
+* **İstasyon Stok Durumu ($stok$):** Bulunulan yakadaki alım noktasında yeni yük hazır mı?
 
 ### Eylem Uzayı (Action Space)
 Her ajan için 5 ayrık (discrete) eylem tanımlıdır:
