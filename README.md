@@ -1,74 +1,104 @@
-# Çoklu Ajanlı Pekiştirmeli Öğrenme ile Çift Döngülü Endüstriyel AGV Filo Yönetimi ve Kilitlenme (Deadlock) Önleme
+# Çoklu Ajanlı Pekiştirmeli Öğrenme ile Çift Döngülü Endüstriyel AGV Filo Yönetimi ve Kilitlenme Önleme
 
-## 1. Özet (Abstract)
-Modern akıllı üretim tesislerinde ve lojistik depolarında Otonom Yönlendirmeli Araçların (AGV - Automated Guided Vehicle) operasyonel verimliliği; tek şeritli koridorlardaki kilitlenmelerin (deadlock) önlenmesine ve boş geri dönüşlerin (deadheading) asgari düzeye indirilmesine bağlıdır. Karşı yakaya teslimat gerçekleştiren bir aracın boş dönmek yerine, o bölgede hazır bulunan yeni siparişi alıp kendi bölgesine taşıması (**Opportunistic Backhauling / Çift Döngülü Taşıma**), hat kapasitesini iki katına çıkarırken trafik sıkışıklığını minimize eder.
+## 1. Özet
 
-Bu projede, dar geçitli bir fabrika ortamında iki bağımsız AGV'nin **Çoklu Ajanlı Pekiştirmeli Öğrenme (Multi-Agent Q-Learning)** ile eğitildiği dinamik bir filo yönetim sistemi geliştirilmiştir. Sistemde araçlar merkezi bir kontrolcüye ihtiyaç duymadan, kısıtlı yerel algılama (LiDAR menzili) altında birbirlerine öncelik tanıyarak tek şeritli koridordan güvenle geçmekte; dururken, boşken ve yüklüyken gerçekçi batarya tüketim dinamiklerini gözeterek görevlerini sıfır kilitlenme ve sıfır kaza ile tamamlamaktadır.
+Akıllı üretim tesislerinde ve depolarda Otonom Yönlendirmeli Araçların (AGV) verimliliği; tek şeritli koridorlardaki kilitlenmelerin önlenmesine ve boş dönüşlerin (deadheading) azaltılmasına bağlıdır. **Çift döngülü taşıma (Opportunistic Backhauling)** ile karşı yakaya teslimat yapan araç boş dönmez, o yakadaki hazır yükü alıp kendi yakasına getirir.
+
+Bu projede dar geçitli bir fabrika ortamında iki bağımsız AGV, **merkezi kontrolcü olmadan** (Decentralized Tabular Q-Learning) eğitilmiştir. Ajanlar kısıtlı yerel algılama altında birbirine yol vermeyi, batarya durumuna göre şarj olmayı ve iki teslimatlık görevi tamamlamayı öğrenir.
 
 ![AGV Çift Döngülü Fabrika Simülasyonu](simulasyon.png)
 
 *Şekil 1: Çift döngülü akıllı AGV simülasyon ortamı, tek şeritli koridor darboğazı, yük istasyonları ve batarya şarj noktaları.*
 
+## 2. Ortam
 
-## 2. MDP (Markov Karar Süreci) Tasarımı
+| Öğe | Değer |
+|---|---|
+| Izgara | 12 × 8 |
+| Duvarlar | x = 3..8 sütunları (y = 4 hariç) |
+| Koridor | (3..8, 4), 6 hücre, tek şeritli |
+| Şarj hücreleri | (0,0), (11,0), (0,7), (11,7) |
+| Batı alım / Doğu teslim | (1,2) / (10,6) |
+| Doğu alım / Batı teslim | (10,2) / (1,6) |
+| Başlangıç | agv_0: (2,4), agv_1: (9,4) |
+| Maks. adım | 300 (zaman aşımı) |
+| Stok yenilenmesi | Boş istasyona adım başı %14 olasılıkla yeni yük gelir |
 
-Sistem, dağıtık (decentralized) ve kısmi gözlemlenebilir çoklu ajan yapısında modellenmiştir:
+**Görev:** Her AGV 2 teslimat yapar (gidiş + dönüş yükü). Bölüm, iki araç da görevi bitirince, batarya bitince veya zaman aşımında sona erer.
 
-### Durum Uzayı (State Space)
-Ajanların durum temsili hem yön bulmayı hem de komşu aracı fark etmeyi sağlayacak şekilde 8 genel değişkenden oluşur:
-* **Konum ($x, y$):** Aracın fabrika ızgarasındaki güncel koordinatları.
-* **Yük Durumu ($payload$):** Yüksüz (0), Batıdan Doğuya taşınan yük (1), Doğudan Batıya taşınan yük (2).
-* **Görev Fazı ($teslimat$):** Aracın tamamladığı teslimat sayısı (gidiş teslimatı mı, dönüş teslimatı mı?).
-* **Batarya Seviyesi ($bat\_level$):** Kritik ($\le \%25$), Orta ($\le \%50$) ve Yüksek enerji durumu.
-* **Komşu AGV Göreli Konumu ($rel\_other$):** Komşu araç $\pm 2$ hücrelik yerel sensör menzilindeyse bağıl konumu $(dx, dy)$, uzaktaysa güvenli mesafe bilgisi.
-* **Koridor Durumu ($corr\_other$):** Karşıdaki aracın tek şeritli koridorda olup olmadığı ve hangi yöne gittiği.
-* **İstasyon Stok Durumu ($stok$):** Bulunulan yakadaki alım noktasında yeni yük hazır mı?
+## 3. MDP Tasarımı
 
-### Eylem Uzayı (Action Space)
-Her ajan için 5 ayrık (discrete) eylem tanımlıdır:
-* `0 - (Bekle / Yol Ver / Şarj Ol):` Koridor ağzında karşıdaki araca geçiş önceliği verir; şarj hücresindeyse bataryayı doldurur.
-* `1 - Yukarı`, `2 - Aşağı`, `3 - Sol`, `4 - Sağ:` Izgara üzerinde birer hücre yönlü hareket.
+### 3.1 Durum Uzayı
 
-### Politika (Policy)
-* **Öğrenme ve Karar:** Model bağımsız Q-Learning (Decentralized Q-Learning) ile eğitilmiştir.
-* **Keşif Stratejisi:** Eğitim süresince doğrusal olarak azalan $\epsilon$-greedy politikası ($\epsilon: 1.0 \rightarrow 0.02$) uygulanmıştır. Test aşamasında ise tamamen greedy ($\epsilon = 0$) deterministik politika kullanılır.
+Durum uzayı, ajanın karar verirken gördüğü bilgilerin tamamıdır. Aşağıdaki 8 değişken, Q-tablosunda her satırı oluşturan `(x, y, payload, deliveries, bat_level, rel, corr, relevant_stock)` durumunu tanımlar.
 
-### Ödül Mekanizması (Reward Function)
-Sistemin verimli çalışması, zamanı iyi kullanması ve işbirliği yapması için tasarlanan ödül yapısı:
+#### Değişkenlerin açıklaması
 
-| Olay / Durum | Ödül Puanı | Açıklama |
-|---|:---:|---|
-| **Zaman Maliyeti (Adım)** | `-1.0` | Aracın oyalanmasını engelleyip en kısa rotayı seçmeye zorlar. |
-| **Bireysel Teslimat** | `+100.0` | Yükün hedef depoya başarıyla ulaştırılması. |
-| **Ortak (Takım) Ödülü** | `+30.0` | Takım arkadaşı teslimat yaptığında verilir (işbirlikçi davranış). |
-| **Görev Tamamlama Bonusu** | `+50.0` | Çift döngüyü (2 tam gidiş-dönüş teslimatını) bitirme ödülü. |
-| **Çarpışma / Kilitlenme Girişimi** | `-40.0` | Hareket iptal edilir; yol verme ve bekleme teşvik edilir. |
-| **Yolda Batarya Bitmesi** | `-100.0` | Görevin başarısızlıkla sonlanması (ağır ceza). |
+| Değişken | Türkçe anlamı | Alabileceği değerler | Neden gerekli? |
+|---|---|---|---|
+| `x` | Aracın yatay konumu (sütun) | 0 – 11 (0: en batı, 11: en doğu) | Ajanın haritası yoktur, hedefe yönelmek ve duvarları öğrenmek için nerede olduğunu bilmelidir. |
+| `y` | Aracın dikey konumu (satır) | 0 – 7 (0: en üst, 7: en alt) | Aynı. Koridor y = 4 satırındadır. |
+| `payload` | Taşınan yük durumu | **0**: boş<br>**1**: Batı→Doğu yükü taşıyor<br>**2**: Doğu→Batı yükü taşıyor | Hedefi belirler: boşsa alım noktasına, 1 ise doğu teslim noktasına, 2 ise batı teslim noktasına gider. Batarya tüketimi de yüke göre değişir. |
+| `deliveries` | Tamamlanan teslimat sayısı (görev aşaması) | **0**: henüz teslimat yapmadı<br>**1**: en az 1 teslimat yaptı | Görevin hangi aşamada olduğunu ayırt eder. 2. teslimat bölümü bitirdiği için "2" değeri durumda hiç görülmez. |
+| `bat_level` | Batarya seviyesi (3 kademe) | **0**: kritik (≤ 25)<br>**1**: orta (26 – 50)<br>**2**: yüksek (> 50) | Ham değer yerine 3 kademe kullanılır, tablo küçük kalır. Kritik seviyede ajan şarj hücresine yönelmeyi öğrenir. |
+| `rel` | Diğer aracın bana göre yeri | **(dx, dy)**: diğer araç ±2 hücre yakınımdaysa yatay ve dikey uzaklığı (örn. (2, 0): 2 hücre sağımda)<br>**(9, 9)**: diğer araç yakında değil veya görevini bitirmiş | Çarpışmadan kaçınmak için. Menzil dışı tüm durumlar tek bir değerde toplandığı için durum sayısı patlamaz. |
+| `corr` | Koridor doluluk sinyali: diğer araç koridorda mı, ne taşıyor? | **0**: diğer araç koridorda değil (veya yok)<br>**1**: diğer araç koridorda ve **boş** (yönü kesin belli değil)<br>**2**: diğer araç koridorda ve **Batı→Doğu** yükü taşıyor (doğuya gidiyor)<br>**3**: diğer araç koridorda ve **Doğu→Batı** yükü taşıyor (batıya gidiyor) | Koridor 6 hücre, sensör ±2 hücredir. Koridorun ortasındaki araç `rel` ile görünmeyebilir. `corr` bu boşluğu kapatır ve yük üzerinden yön ipucu verir. Karşı yöne gidiyorsa yol verme (eylem 0) kararının temelidir. |
+| `relevant_stock` | Bulunduğum yakadaki alım noktasında yük hazır mı? | **0**: stok yok, yük henüz gelmedi<br>**1**: yük hazır | `x ≤ 5` ise batı alım istasyonu, `x ≥ 6` ise doğu alım istasyonu dikkate alınır. Yük hazır değilse alım noktasında beklemek, hazırsa gidip almak gerekir. Diğer yakadaki stok durumdan çıkarılmıştır. |
 
----
+#### Neden `corr` değişkeni de var? Sensör yetmez mi?
 
-## 3. Endüstriyel Dinamikler ve Kilitlenme (Deadlock) Çözümü
+1. **Menzil sınırı:** Koridor 6 hücre uzunluğunda, sensör ±2 hücre görür. Koridor ağzında (x = 2) duran ajan en fazla x = 4'e kadar görür. Karşıdaki araç x = 5 – 8 arasındaysa `rel` "uzak" döner, ama koridor doludur ve girmek kafa kafaya kalmak demektir.
+2. **Yön bilgisi:** `rel` yalnızca "komşu şurada" der, "hangi yöne gidiyor" demez. Tabular Q-learning'de hız veya geçmiş yoktur. `corr` yük bilgisi üzerinden gidiş yönünü ima eder.
+3. **Durum sadeleştirme:** Birçok `(dx, dy)` kombinasyonunu ezberlemek yerine "koridorda karşı yönde biri var mı" tek bir değişkende özetlenir.
 
-1. **Çift Döngülü Taşıma (Opportunistic Backhauling):**
-   * Doğu Depoya (`10, 6`) yük getiren AGV boş dönmez; hemen yanındaki Doğu Alma (`10, 2`) noktasından batıya gidecek hazır parçayı sırtlar.
-   * Aynı şekilde batıya teslimat yapan diğer AGV de dönüş yükünü alarak fabrika taşıma kapasitesini ikiye katlar.
-2. **Kilitlenme (Deadlock) ve Öncelik Yönetimi:**
-   * Koridor tek şeritli olduğu için iki araç aynı anda karşı karşıya gelemez.
-   * Ajanlar, komşu aracın koridorda olduğunu yerel sensör ufku ($\pm 2$) içinde algıladığında koridor ağzındaki güvenli alanda bekleyip (`Action 0`) karşıdakine yol vermeyi otonom olarak öğrenmiştir.
-3. **Gerçekçi Fiziksel Batarya Modeli:**
-   * **Yüksüz Seyir Tüketimi:** `1.0` birim/adım
-   * **Yüklü Taşıma Tüketimi:** `2.0` birim/adım
-   * **Dururken / Beklerken Tüketim:** `0.5` birim/adım (Endüstriyel bilgisayar, LiDAR, emniyet sensörleri ve fren tutucuların sürekli enerji harcaması)
-   * **Şarj İstasyonu Dolumu:** Şarj hücresinde `Bekle` eylemi uygulandığında adım başı `+%20` batarya dolumu.
+> **Not:** `corr`, diğer aracın gerçek konumundan hesaplanır ve menzil sınırı yoktur. Yani saf LiDAR bilgisi değil, **hafif bir trafik/doluluk sinyalidir** (gerçek sistemlerdeki zone-blocking benzeri). Sistem bu nedenle "yalnızca yerel sensör" değil, "yerel sensör + koridor doluluk sinyali" ile çalışır.
 
----
+### 3.2 Eylem Uzayı
 
-## 4. Eğitim ve Performans Grafikleri
+| Eylem | Anlam |
+|---|---|
+| 0 | Bekle / Yol ver / Şarj ol (şarj hücresindeyse +%20 batarya) |
+| 1, 2, 3, 4 | Yukarı, Aşağı, Sol, Sağ (bir hücre) |
 
-Model 60.000 bölüm boyunca eğitilmiş ve test ortamında değerlendirilmiştir.
+### 3.3 Ödül Fonksiyonu
 
-### A. Ajan Ödül Grafikleri (Reward Convergence)
-Ajanların bölüm başına kazandığı net ödül; eğitimin başında rotayı bilmedikleri ve adım/çarpışma cezası aldıkları için `-200` bandındadır. Görev başarıyla öğrenildikçe kararlı bir şekilde yükselerek teorik optimum olan **`+270` puan platosuna** oturmuştur.
+| Olay | Ödül | Açıklama |
+|---|---|---|
+| Adım | -1.0 | Her adımda. En kısa rotayı teşvik eder. |
+| Duvara/sınıra hareket | -1.0 | Hareket iptal edilir, araç yerinde kalır. Bölüm sonlanmaz. |
+| Yük alma | +10.0 | Alım noktasında stok varken yük alınması |
+| Bireysel teslimat | +100.0 | Yükün hedef noktaya ulaşması |
+| Takım ödülü | +30.0 | Takım arkadaşı teslimat yapınca |
+| Görev tamamlama | +50.0 | 2. teslimatın bitmesi |
+| Çarpışma girişimi | -40.0 | İki araç aynı hücreye girmeye veya yer değiştirmeye çalışırsa, hareket eden araca verilir ve hareket iptal edilir |
+| Batarya bitmesi | -100.0 | Bölüm sonlanır |
+
+**Tasarım notu:** Duvar hatası telafi edilebilir olduğu için bölümü bitirmez, küçük ceza yeterlidir. Erken sonlandırma, rastgele keşfin yaşandığı eğitim başlangıcında öğrenmeyi zorlaştırırdı. Bölümü sonlandıran tek durum, kurtarılamaz olan batarya bitmesidir.
+
+### 3.4 Ödül Şekillendirme
+
+Asıl ödüller (teslimat, bonus) seyrek olduğu için eğitimin başında ajan neyi doğru yaptığını anlayamaz. Bunu çözmek için ajana, aktif hedefine yaklaşırken küçük bir ek ödül, uzaklaşırken küçük bir ceza verilir (potansiyel tabanlı şekillendirme, `F = γ·Φ(s') − Φ(s)`). Hedef; yüksüzken alım noktası, yüklüyken teslim noktası, batarya kritikken şarj hücresidir. Bu yöntem en iyi politikayı değiştirmeden öğrenmeyi hızlandırır. Ek ödül yalnızca eğitimde kullanılır, grafiklerdeki ödüle dahil değildir.
+
+## 4. Eğitim
+
+| Parametre | Değer |
+|---|---|
+| Algoritma | Bağımsız (decentralized) tabular Q-Learning, ajan başına ayrı Q-tablosu |
+| Öğrenme oranı (α) | 0.1 |
+| İndirim (γ) | 0.97 |
+| Keşif | ε-greedy, 1.0 → 0.02, ilk %80 bölümde (48.000) doğrusal azalır, sonra 0.02'de sabit |
+| Toplam bölüm | 60.000 |
+| Müfredat | İlk %15 bölüm (9.000) tek ajanlı (solo), sonrasında iki ajan |
+| Rastgele başlangıç | Bölümlerin %50'sinde. Konum rastgele (batı x≤2, doğu x≥9) ve batarya 40-100 arası |
+| Test | Tamamen greedy (ε = 0). Görülmemiş durumda rastgele eylem seçilir. |
+
+Gelen bilgiler yalnızca iki ajanlı aşamadan kaydedilir, bu yüzden grafikler 9.001. bölümden başlar.
+
+## 5. Sonuçlar
+
+### 5.1 Ödül Yakınsaması
+
+Eğitim başında ajanlar rotayı bilmediği için ödül yaklaşık -200 bandındadır. Eğitim ilerledikçe kararlı biçimde yükselir ve yaklaşık +270 platosuna oturur (şekillendirme hariç, bölüm başına). Kabaca hesap: 2 teslimat (200) + takım ödülleri (60) + görev bonusu (50) + yük alma (20) = 330, adım cezaları düşülünce ≈270.
 
 ![AGV 0 Eğitim Grafiği](agv0_egitim_grafigi.png)
 
@@ -78,11 +108,10 @@ Ajanların bölüm başına kazandığı net ödül; eğitimin başında rotayı
 
 *Şekil 3: AGV 1 için bölüm bazlı ödülün yakınsama eğrisi.*
 
----
+### 5.2 Teslimat ve Adım Sayısı
 
-### B. Teslimat Başarısı ve Adım Sayısı Grafikleri
-* **Bölüm Başına Teslimat:** Eğitim başında 0 olan teslimat sayısı, politikanın oturmasıyla birlikte maksimum kapasite olan **4/4 teslimata** (her iki aracın çift döngüsü) ulaşmıştır.
-* **Adım Sayısı:** Başlangıçta 400 adımda zaman aşımına (timeout) uğrayan rotalar, optimum bekleme ve sürüş ile **~54 adıma** optimize edilmiştir.
+- **Teslimat:** Bölüm başına teslimat sayısı en yüksek kapasite olan 4/4'e ulaşır.
+- **Adım:** Başlangıçta zaman aşımına (300 adım) uğrayan bölümler, optimum bekleme ve sürüşle yaklaşık 54 adıma iner.
 
 ![Teslimat Başarısı Grafiği](teslimat_grafigi.png)
 
@@ -92,28 +121,42 @@ Ajanların bölüm başına kazandığı net ödül; eğitimin başında rotayı
 
 *Şekil 5: Bölüm başına harcanan adım sayısının en kısa rotaya (~54 adım) inmesi.*
 
----
+![Çarpışma Girişimi Grafiği](carpisma_grafigi.png)
 
-### C. Test Başarı İstatistiği (300 Test Bölümü)
-* **Sabit Başlangıç:** 300 / 300 bölümde (%100) çift teslimat sıfır kilitlenme ve sıfır kaza ile tamamlandı.
-* **Rastgele Başlangıç ve Rastgele Batarya:** 293 / 300 bölümde (%97.7) tam başarı sağlandı.
+*Şekil 6: Bölüm başına çarpışma girişimi sayısı.*
 
----
+### 5.3 Test (300 bölüm)
 
-## 5. Kurulum ve Canlı Çalıştırma
+| Senaryo | Başarı |
+|---|---|
+| Sabit başlangıç | 300 / 300 (%100) |
+| Rastgele başlangıç + rastgele batarya | 293 / 300 (%97.7) |
 
-### Gereksinimler
+**Başarı tanımı:** Tüm teslimatların 300 adım içinde tamamlanması ve batarya bitmemesi. Kodda ayrı bir deadlock dedektörü yoktur, kilitlenme zaman aşımı olarak görünür.
+
+## 6. Sınırlılıklar
+
+- **Haritaya özgüdür.** Tabular Q-learning hücre bazlı öğrenir. Duvarlar gözlemde yoktur, deneyimle ezberlenir, bu yüzden başka bir haritaya genellenmez.
+- **Ölçeklenebilirlik.** Ajan sayısı veya harita büyürse durum uzayı hızla büyür. Derin RL (MAPPO, QMIX vb.) gerekir.
+- **Koridor sinyali.** `corr` değişkeni menzil sınırı olmayan bir doluluk bilgisidir, tamamen yerel algılama değildir.
+- **Görülmemiş durumlar.** Test sırasında Q-tablosunda olmayan bir durumda rastgele eylem seçilir, rastgele başlangıçtaki başarısız bölümlerin bir nedeni bu olabilir.
+
+## 7. Kurulum ve Çalıştırma
+
 ```bash
 pip install numpy matplotlib pygame pettingzoo gymnasium
 ```
 
-### Canlı Simülasyonu Başlatma (Görsel Test)
-Eğitilmiş en iyi model ağırlıklarıyla (`q_table.pkl`) araçların koridorda birbirine yol verişini ve yük döngüsünü canlı izlemek için:
 ```bash
-python test.py
+python train.py   # eğitim, q_table.pkl ve grafikleri üretir
+python test.py    # eğitilmiş modeli görsel olarak çalıştırır
 ```
 
-### Modeli Yeniden Eğitme
-```bash
-python train.py
-```
+## 8. Dosya Yapısı
+
+| Dosya | Görev |
+|---|---|
+| `agv_env.py` | PettingZoo ortamı, durum ayrıklaştırma, ödül ve şekillendirme |
+| `train.py` | Q-Learning eğitimi, grafik üretimi |
+| `test.py` | Eğitilmiş tabloyla greedy test |
+| `viewer.py` | Pygame görselleştirme |
